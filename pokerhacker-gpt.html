@@ -1,0 +1,1751 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Poker Hacker</title>
+  <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.development.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.28.4/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Zalando+Sans+Expanded:wght@400;500;700&family=Open+Sans:wght@400;600&display=stylesheet" rel="stylesheet">
+  <style>
+    body {
+      background: green;
+      font-family: 'Zalando Sans Expanded', 'Open Sans', sans-serif;
+      color: #fff;
+      padding: 20px;
+      position: relative;
+    }
+    .table-circle {
+      position: relative;
+      width: 600px;
+      height: 600px;
+      border-radius: 50%;
+      background: radial-gradient(circle at center, #2f7a2f, #145214);
+      margin: auto;
+    }
+    .player-seat {
+      position: absolute;
+      transform: translate(-50%, -50%);
+      transition: all 0.7s ease;
+      min-width: 100px;
+    }
+    .community-cards {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      display: flex;
+      gap: 0.5rem;
+    }
+    .card-anim {
+      transition: all 0.5s ease;
+      transform: scale(0.5);
+      opacity: 0;
+    }
+    .card-anim.show {
+      transform: scale(1);
+      opacity: 1;
+    }
+    .chip-stack {
+      position: relative;
+      width: 30px;
+      height: 30px;
+      margin: 2px 0;
+      transition: transform 0.5s ease, top 0.5s ease, left 0.5s ease;
+    }
+    .chip {
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      background: radial-gradient(circle at 25% 25%, #f00, #a00);
+      box-shadow: 0 2px 5px rgba(0,0,0,0.5);
+      position: absolute;
+      top: 0;
+      left: 0;
+      transform: translateY(0);
+      z-index: -1;
+      transition: all 0.8s ease;
+    }
+    .status {
+      background: #222;
+      font-size: 14px;
+      padding: 10px;
+      width: 400px;
+      border-radius: 8px;
+      height: 150px;
+      overflow-y: auto;
+      white-space: pre-line;
+      color: #E0E0E0;
+      line-height: 1.4;
+    }
+    .status-neutral { color: #fff; }
+    .status-player { color: #64B5F6; }
+    .status-opponent { color: #F06292; }
+    .status-win { color: #4DD0E1; }
+    .status-loss { color: #EF5350; }
+    .status-tie { color: #FFD54F; }
+    .status-error { color: #F44336; }
+    .status-pot { color: #81C784; }
+    .gto-panel, .thinking-panel {
+      width: 400px;
+      height: 250px;
+      background: rgba(0,0,0,0.5);
+      border-radius: 8px;
+      padding: 10px;
+      color: #fff;
+    }
+    .gto-panel h3, .thinking-panel h3 {
+      margin: 0 0 10px;
+      font-size: 16px;
+    }
+    .thoughts {
+      font-size: 14px;
+      overflow-y: auto;
+      height: 200px;
+      white-space: pre-line;
+      padding-right: 15px;
+    }
+    .right-panel {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+    .left-panel {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .dealer-button {
+      width: 30px;
+      height: 30px;
+      background: #fff;
+      border-radius: 50%;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      font-weight: bold;
+      color: #000;
+      margin-right: 5px;
+    }
+    .winner-button {
+      width: 30px;
+      height: 30px;
+      background: #FFD700;
+      border-radius: 50%;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      font-weight: bold;
+      color: #000;
+      margin-right: 5px;
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+    const suits = ["♠", "♥", "♦", "♣"];
+    const ranks = ["2","3","4","5","6","7","8","9","10","J","Q","K","A"];
+    const rankValue = {"2":2,"3":3,"4":4,"5":5,"6":6,"7":7,"8":8,"9":9,"10":10,"J":11,"Q":12,"K":13,"A":14};
+    const smallBlind = 10, bigBlind = 20;
+    const stages = ["Pre-flop", "Flop", "Turn", "River"];
+    function createDeck() {
+      return suits.flatMap(s => ranks.map(r => r+s));
+    }
+    function shuffle(a) {
+      for (let i = a.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [a[i], a[j]] = [a[j], a[i]];
+      }
+      return a;
+    }
+    function evaluateHand(cards) {
+      if (!cards || cards.length < 2 || cards.some(c => typeof c !== "string" || c.length < 2)) {
+        return { rank: "High Card", value: 0, kickers: [], cardsUsed: [] };
+      }
+      function getCombinations(arr, k) {
+        const result = [];
+        const combine = (start, chosen) => {
+          if (chosen.length === k) {
+            result.push([...chosen]);
+            return;
+          }
+          for (let i = start; i < arr.length; i++) {
+            combine(i + 1, [...chosen, arr[i]]);
+          }
+        };
+        combine(0, []);
+        return result;
+      }
+      const combinations = cards.length >= 5 ? getCombinations(cards, 5) : [cards];
+      const handRanks = [
+        "High Card", "One Pair", "Two Pair", "Three of a Kind", "Straight",
+        "Flush", "Full House", "Four of a Kind", "Straight Flush"
+      ];
+      let bestHand = { rank: "High Card", value: 0, kickers: [], cardsUsed: [] };
+      let bestRankIndex = 0;
+      for (const combo of combinations) {
+        const ranks = combo.map(c => c.slice(0, -1)).filter(r => r);
+        const suits = combo.map(c => c.slice(-1)).filter(s => s);
+        const rankCounts = {};
+        const suitCounts = {};
+        ranks.forEach(r => rankCounts[r] = (rankCounts[r] || 0) + 1);
+        suits.forEach(s => suitCounts[s] = (suitCounts[s] || 0) + 1);
+        const rankNums = ranks.map(r => rankValue[r]).sort((a, b) => b - a);
+        const flushSuit = Object.keys(suitCounts).find(s => suitCounts[s] >= 5);
+        if (flushSuit && combo.length >= 5) {
+          const flushCards = combo.filter(c => c.slice(-1) === flushSuit)
+            .map(c => rankValue[c.slice(0, -1)])
+            .sort((a, b) => b - a);
+          if (flushCards.length >= 5) {
+            let isStraightFlush = false;
+            let straightFlushHigh = 0;
+            for (let i = 0; i <= flushCards.length - 5; i++) {
+              const window = flushCards.slice(i, i+5);
+              if (window[0] - window[4] === 4 && new Set(window).size === 5) {
+                isStraightFlush = true;
+                straightFlushHigh = window[0];
+                break;
+              }
+            }
+            if (flushCards.includes(14) && flushCards.includes(2) && flushCards.includes(3) &&
+                flushCards.includes(4) && flushCards.includes(5)) {
+              isStraightFlush = true;
+              straightFlushHigh = 5;
+            }
+            if (isStraightFlush && handRanks.indexOf("Straight Flush") > bestRankIndex) {
+              bestHand = { rank: "Straight Flush", value: straightFlushHigh, kickers: [], cardsUsed: combo };
+              bestRankIndex = handRanks.indexOf("Straight Flush");
+              continue;
+            }
+            if (handRanks.indexOf("Flush") > bestRankIndex) {
+              bestHand = { rank: "Flush", value: flushCards[0], kickers: flushCards.slice(1, 5), cardsUsed: combo };
+              bestRankIndex = handRanks.indexOf("Flush");
+              continue;
+            }
+          }
+        }
+        const counts = Object.entries(rankCounts)
+          .map(([r, c]) => [parseInt(rankValue[r]), c])
+          .sort((a, b) => b[1] - a[1] || b[0] - a[0]);
+        const countValues = counts.map(c => c[1]);
+        const rankValues = counts.map(c => c[0]);
+        const kickers = rankNums.filter(r => !counts.some(c => c[0] === r && c[1] >= 2)).sort((a, b) => b - a);
+        if (countValues[0] === 4 && handRanks.indexOf("Four of a Kind") > bestRankIndex) {
+          bestHand = { rank: "Four of a Kind", value: rankValues[0], kickers: kickers.slice(0, 1), cardsUsed: combo };
+          bestRankIndex = handRanks.indexOf("Four of a Kind");
+          continue;
+        }
+        if (countValues[0] >= 3 && countValues[1] >= 2 && handRanks.indexOf("Full House") > bestRankIndex) {
+          bestHand = { rank: "Full House", value: rankValues[0], kickers: [rankValues[1]], cardsUsed: combo };
+          bestRankIndex = handRanks.indexOf("Full House");
+          continue;
+        }
+        let straight = false;
+        let straightHigh = 0;
+        for (let i = 0; i <= rankNums.length - 5; i++) {
+          const window = rankNums.slice(i, i+5);
+          if (window[0] - window[4] === 4 && new Set(window).size === 5) {
+            straight = true;
+            straightHigh = window[0];
+            break;
+          }
+        }
+        if (rankNums.includes(14) && rankNums.includes(2) && rankNums.includes(3) &&
+            rankNums.includes(4) && rankNums.includes(5)) {
+          straight = true;
+          straightHigh = 5;
+        }
+        if (straight && handRanks.indexOf("Straight") > bestRankIndex) {
+          bestHand = { rank: "Straight", value: straightHigh, kickers: [], cardsUsed: combo };
+          bestRankIndex = handRanks.indexOf("Straight");
+          continue;
+        }
+        if (countValues[0] === 3 && handRanks.indexOf("Three of a Kind") > bestRankIndex) {
+          bestHand = { rank: "Three of a Kind", value: rankValues[0], kickers: kickers.slice(0, 2), cardsUsed: combo };
+          bestRankIndex = handRanks.indexOf("Three of a Kind");
+          continue;
+        }
+        if (countValues[0] >= 2 && countValues[1] >= 2 && handRanks.indexOf("Two Pair") > bestRankIndex) {
+          const pairs = rankValues.slice(0, 2);
+          bestHand = { rank: "Two Pair", value: Math.max(...pairs), kickers: [Math.min(...pairs), ...kickers.slice(0, 1)], cardsUsed: combo };
+          bestRankIndex = handRanks.indexOf("Two Pair");
+          continue;
+        }
+        if (countValues[0] >= 2 && handRanks.indexOf("One Pair") > bestRankIndex) {
+          bestHand = { rank: "One Pair", value: rankValues[0], kickers: kickers.slice(0, 3), cardsUsed: combo };
+          bestRankIndex = handRanks.indexOf("One Pair");
+          continue;
+        }
+        if (handRanks.indexOf("High Card") >= bestRankIndex) {
+          bestHand = { rank: "High Card", value: rankNums[0], kickers: rankNums.slice(1, 5), cardsUsed: combo };
+          bestRankIndex = handRanks.indexOf("High Card");
+        }
+      }
+      if (bestRankIndex === 0) {
+        const allRankNums = cards.map(c => rankValue[c.slice(0, -1)]).sort((a, b) => b - a);
+        bestHand = { rank: "High Card", value: allRankNums[0], kickers: allRankNums.slice(1, 5), cardsUsed: [] };
+      }
+      return bestHand;
+    }
+    // New: Detect draws for better hand description
+    function detectDraws(hand, community) {
+      const allCards = [...hand, ...community];
+      const playerSuits = hand.map(c => c.slice(-1));
+      const boardSuits = community.map(c => c.slice(-1));
+      const playerRanks = hand.map(c => rankValue[c.slice(0, -1)]).sort((a, b) => a - b);
+      const boardRanks = community.map(c => rankValue[c.slice(0, -1)]).sort((a, b) => a - b);
+      const allRanks = [...playerRanks, ...boardRanks].sort((a, b) => a - b);
+
+      // Flush draw
+      const suitCounts = {};
+      allCards.forEach(c => {
+        const s = c.slice(-1);
+        suitCounts[s] = (suitCounts[s] || 0) + 1;
+      });
+      let flushDraw = null;
+      let flushOuts = 0;
+      Object.entries(suitCounts).forEach(([s, count]) => {
+        if (count === 4) {
+          flushDraw = `Flush draw (${s})`;
+          flushOuts = 9;
+        }
+      });
+
+      // Straight draws
+      let straightDraw = null;
+      let straightOuts = 0;
+      // Open-ended: 8 outs
+      // Gutshot: 4 outs
+      // Check for open-ended
+      for (let i = 0; i < allRanks.length - 3; i++) {
+        const window = allRanks.slice(i, i + 4);
+        const unique = new Set(window).size;
+        if (unique === 4 && window[3] - window[0] === 3) {
+          straightDraw = "Open-ended straight draw";
+          straightOuts = 8;
+          break;
+        }
+      }
+      // Gutshot if no open-ended
+      if (!straightDraw) {
+        for (let i = 0; i < allRanks.length - 2; i++) {
+          const window = allRanks.slice(i, i + 3);
+          if (new Set(window).size === 3 && window[2] - window[0] === 4) {
+            straightDraw = "Gutshot straight draw";
+            straightOuts = 4;
+            break;
+          }
+        }
+      }
+
+      // Pair strength relative to board
+      const handEval = evaluateHand(allCards);
+      let pairDesc = "";
+      if (handEval.rank === "One Pair") {
+        const boardTop = Math.max(...boardRanks);
+        if (handEval.value === boardTop) {
+          pairDesc = " (board pair)";
+        } else if (handEval.value > boardTop) {
+          pairDesc = ` (top pair)`;
+        } else {
+          pairDesc = ` (middle pair)`;
+        }
+      }
+
+      const draws = [flushDraw, straightDraw].filter(Boolean);
+      const primaryDraw = draws.length > 0 ? draws[0] : null;
+      const secondaryDraw = draws.length > 1 ? draws[1] : null;
+      const totalOuts = flushOuts + straightOuts - (primaryDraw && secondaryDraw ? 2 : 0); // Discount overlap
+
+      return {
+        flushDraw,
+        straightDraw,
+        primaryDraw,
+        secondaryDraw,
+        totalOuts,
+        pairDesc,
+        hasDraw: !!primaryDraw,
+        drawStrength: primaryDraw ? (primaryDraw.includes("Flush") ? "strong" : "medium") : "none"
+      };
+    }
+    const Card = ({ card, animate }) => {
+      const [show, setShow] = useState(false);
+      useEffect(() => {
+        if (animate) {
+          const t = setTimeout(() => setShow(true), 50);
+          return () => clearTimeout(t);
+        } else setShow(true);
+      }, [animate]);
+      return (
+        <div className={`w-10 h-14 bg-white rounded-md shadow-lg flex items-center justify-center font-bold
+          ${card.includes('♥') || card.includes('♦') ? 'text-red-600' : 'text-black'}
+          card-anim ${show ? 'show' : ''}`}>
+          {card}
+        </div>
+      );
+    };
+    const ChipStack = ({ count }) => (
+      <div className="chip-stack">
+        {Array.from({length: Math.min(10, Math.floor(count/50))}).map((_,i) => (
+          <div key={i} className="chip" style={{transform: `translateY(${-i*3}px) rotate(${Math.random()*10-5}deg)`}}></div>
+        ))}
+      </div>
+    );
+    const Player = ({ player, x, y, gameInProgress, roundActive, dealerIndex, lastWinners }) => (
+      <div className="player-seat" style={{left: `${x}%`, top: `${y}%`}}>
+        <div className="flex flex-col items-center">
+          <div className="mb-1">{player.id === 0 ? "You" : `P${player.id}`}</div>
+          <div className="flex gap-1">
+            {lastWinners.includes(player.id) && <div className="winner-button">W</div>}
+            {player.folded ? (
+              <div className="flex items-center justify-center font-bold text-white">
+                {player.busted ? "Busted" : "Folded"}
+              </div>
+            ) : (
+              player.cards.map((c, i) => (
+                <Card
+                  key={i}
+                  card={gameInProgress && roundActive && player.id !== 0 ? "?" : c}
+                  animate={true}
+                />
+              ))
+            )}
+            {player.id === dealerIndex && <div className="dealer-button">D</div>}
+          </div>
+          <div className="text-sm mt-1 flex flex-col items-center">
+            {!player.busted ? `Chips: ${player.chips}` : "Busted"}
+            {!player.busted && <ChipStack count={player.chips} />}
+          </div>
+        </div>
+      </div>
+    );
+    const Pot = ({ amount }) => (
+      <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2">
+        <div className="text-white font-bold mb-2 text-center">Pot: ${amount}</div>
+        <ChipStack count={Math.min(20, Math.floor(amount/50))} />
+      </div>
+    );
+    const getPlayerPositions = (numPlayers) => {
+      const angleStep = 360/numPlayers;
+      const radius = 45;
+      return Array.from({length: numPlayers}).map((_,i) => {
+        const rad = (90 + angleStep * i) * Math.PI / 180;
+        const x = 50 + radius * Math.cos(rad);
+        const y = 50 + radius * Math.sin(rad);
+        return {x,y};
+      });
+    };
+    const getHandStrength = (rank, value = 0) => {
+      let baseStrength = {
+        "High Card": "weak", "One Pair": "weak", "Two Pair": "medium", "Three of a Kind": "medium",
+        "Straight": "strong", "Flush": "strong", "Full House": "very strong", "Four of a Kind": "very strong",
+        "Straight Flush": "nuts"
+      }[rank] || "unknown";
+      // Adjust for pair/top pair strength
+      if (rank === "One Pair" && value >= 13) {
+        return "very strong"; // Top pair with Aces
+      } else if (rank === "One Pair" && value >= 12) {
+        return "strong"; // High pairs like KK, QQ
+      } else if (rank === "One Pair" && value >= 10) {
+        return "medium"; // Medium pairs
+      }
+      return baseStrength;
+    };
+    const getStartingHandInfo = (hand) => {
+      if (hand.length !== 2) return { category: "unknown", equity: 0.5, strength: "marginal" };
+      const r1 = rankValue[hand[0].slice(0, -1)];
+      const r2 = rankValue[hand[1].slice(0, -1)];
+      const suited = hand[0].slice(-1) === hand[1].slice(-1);
+      const pair = r1 === r2;
+      const high = Math.max(r1, r2);
+      const low = Math.min(r1, r2);
+      const gap = high - low;
+      let category, equity, strength;
+      if (pair) {
+        equity = 0.80 + (high - 7) * 0.015; // Approx: 77 ~70%, AA ~85%
+        equity = Math.max(0.50, Math.min(0.85, equity));
+        if (high >= 11) { // JJ+
+          category = "premium";
+          strength = "very strong";
+        } else if (high >= 9) { // 99-TT
+          category = "strong";
+          strength = "strong";
+        } else {
+          category = "playable";
+          strength = "medium";
+        }
+      } else if (suited) {
+        if (high === 14 && low >= 10) { // AKs-AJs
+          category = "premium";
+          equity = 0.66;
+          strength = "strong";
+        } else if (high >= 12 && gap <= 2) { // KQs+, QJs, etc.
+          category = "strong";
+          equity = 0.60;
+          strength = "medium";
+        } else if (gap <= 3) { // Suited connectors/gappers
+          category = "playable";
+          equity = 0.55;
+          strength = "marginal";
+        } else {
+          category = "marginal";
+          equity = 0.50;
+          strength = "weak";
+        }
+      } else { // Offsuit
+        if (high === 14 && low >= 10) { // AKo-ATo
+          category = "premium";
+          equity = 0.65;
+          strength = "strong";
+        } else if (high >= 13 && low >= 11) { // KQo+, KJo
+          category = "strong";
+          equity = 0.62;
+          strength = "medium";
+        } else if (high >= 12 && low >= 10 && gap <= 2) { // QJo, QTo, JTo (playable broadways)
+          category = "playable";
+          equity = 0.58;
+          strength = "medium";
+        } else {
+          category = "marginal";
+          equity = 0.52;
+          strength = "weak";
+          // FIXED: Very weak for low offsuit gappers (poor implied odds)
+          if (low <= 6 && gap > 1) {
+            strength = "very weak";
+            equity = 0.48;
+          }
+        }
+      }
+      return { category, equity: equity.toFixed(2), strength };
+    };
+      const estimateEquity = (myCards, community, numPlayers = 2, isPreflop = false) => {
+      if (isPreflop) {
+        const info = getStartingHandInfo(myCards);
+        // FIXED: Softer multiway penalty (0.03 per extra player, non-linear cap at 0.15)
+        const multiwayPenalty = Math.min((numPlayers - 2) * 0.03, 0.15);
+        return (parseFloat(info.equity) - multiwayPenalty).toFixed(2);
+      }
+      // Improved postflop: Base on made hand + draws
+      const draws = detectDraws(myCards, community);
+      const handEval = evaluateHand([...myCards, ...community]);
+      const handRanks = ["High Card", "One Pair", "Two Pair", "Three of a Kind", "Straight", "Flush", "Full House", "Four of a Kind", "Straight Flush"];
+      let baseEquity = handRanks.indexOf(handEval.rank) / 8.0;
+      let drawEquity = 0;
+      if (draws.primaryDraw) {
+        if (draws.primaryDraw.includes("Flush")) {
+          drawEquity = community.length === 3 ? 0.35 : (community.length === 4 ? 0.19 : 0); // ~35% on flop, 19% on turn
+        } else if (draws.primaryDraw.includes("Open-ended")) {
+          drawEquity = community.length === 3 ? 0.32 : (community.length === 4 ? 0.17 : 0);
+        } else if (draws.primaryDraw.includes("Gutshot")) {
+          drawEquity = community.length === 3 ? 0.16 : (community.length === 4 ? 0.09 : 0);
+        }
+        // Add backdoor draws ~5-10%
+        if (draws.secondaryDraw) drawEquity += 0.05;
+      }
+      // Adjust for made hand weakness (e.g., board pair only)
+      if (handEval.rank === "One Pair" && draws.pairDesc?.includes("board")) {
+        baseEquity -= 0.15; // Bluff catcher
+      }
+      const heuristicEquity = (baseEquity * 0.6 + drawEquity * 0.4) + (Math.random() * 0.05 - 0.025); // Slight variance
+      return Math.min(1, Math.max(0, heuristicEquity)).toFixed(2);
+    };
+    const heuristicTip = (features) => {
+      const { stage, hand, position, to_call, pot, num_players, community = [] } = features;
+      const isPreflop = stage === 'Pre-flop';
+      const potSize = pot + to_call;
+      const potOdds = to_call / potSize;
+      let tip = "";
+      let handDesc, strength, equity, threshold;
+      if (isPreflop) {
+        const info = getStartingHandInfo(hand);
+        handDesc = `${hand[0]}${hand[1]} ${info.category}`;
+        strength = info.strength;
+        equity = estimateEquity(hand, [], num_players, true);
+        // Tiered threshold for very weak hands
+        if (strength === "very weak") {
+          threshold = potOdds + 0.25;
+        } else if (strength === "weak") {
+          threshold = potOdds + 0.15;
+        } else {
+          threshold = potOdds + 0.05;
+        }
+        tip += `Preflop Hand: ${handDesc} (${strength})\nEquity vs random: ${equity}\nPot odds: ${(potOdds * 100).toFixed(0)}%\n`;
+        const r1 = rankValue[hand[0].slice(0, -1)];
+        const r2 = rankValue[hand[1].slice(0, -1)];
+        const suited = hand[0].slice(-1) === hand[1].slice(-1);
+        const pair = r1 === r2;
+        const high = Math.max(r1, r2);
+        const gap = Math.abs(r1 - r2);
+        if (pair && high >= 11) { // JJ+
+          tip += 'Premium pair: Raise 3-5x +1BB per limper.';
+        } else if (pair && high >= 9) { // 99-TT
+          tip += 'Strong pair: Raise to isolate.';
+        } else if (high >= 13 || (high >= 12 && (suited || pair))) {
+          tip += 'Premium broadway: Raise for value.';
+        } else if (suited && gap <= 2) {
+          tip += 'Suited connectors: Call or small raise in position.';
+        } else if (parseFloat(equity) > threshold) {
+          tip += 'Playable: Call if odds good, small raise in position.';
+        } else {
+          tip += 'Marginal/Weak: Fold preflop.';
+        }
+      } else {
+        const draws = detectDraws(hand, community);
+        const allCards = [...hand, ...community];
+        const handEval = evaluateHand(allCards);
+        // Improved handDesc: Include draws and relative strength
+        handDesc = handEval.rank;
+        if (draws.pairDesc) handDesc += draws.pairDesc;
+        if (draws.primaryDraw) {
+          handDesc = draws.primaryDraw;
+          if (draws.hasDraw && handEval.rank !== "High Card") handDesc += ` + ${handEval.rank}`;
+        } else if (draws.pairDesc?.includes("board")) {
+          handDesc = `${handEval.rank} from board`;
+        }
+        strength = draws.hasDraw ? draws.drawStrength : getHandStrength(handEval.rank, handEval.value);
+        equity = estimateEquity(hand, community, num_players, false);
+        threshold = potOdds + 0.05;  // Postflop unchanged
+        tip += `Hand: ${handDesc} (${strength})\nEquity: ${equity}\nPot odds: ${(potOdds * 100).toFixed(0)}%\n`;
+        // Improved advice: Consider draws specifically
+        if (draws.primaryDraw?.includes("Flush")) {
+          tip += 'Nut flush draw: Semi-bluff raise or check-raise for fold equity.';
+        } else if (draws.primaryDraw?.includes("Open-ended")) {
+          tip += 'Strong straight draw: Aggressive with semi-bluff.';
+        } else if (draws.primaryDraw?.includes("Gutshot")) {
+          tip += 'Weak draw: Call small bets, fold to big ones.';
+        } else if (parseFloat(equity) > 0.75) {
+          tip += 'Very strong: Bet or raise for value.';
+        } else if (parseFloat(equity) > 0.60) {
+          tip += 'Strong: Bet if unchecked, raise if bet into.';
+        } else if (parseFloat(equity) > threshold) {
+          tip += 'Medium: Call or check-raise.';
+        } else {
+          tip += 'Weak: Fold or check/fold.';
+        }
+        if (draws.totalOuts > 0) {
+          tip += `\nOuts: ${draws.totalOuts} (~${(draws.totalOuts / (52 - hand.length - community.length) * 100).toFixed(0)}% to hit next card)`;
+        }
+      }
+      const positionGood = ['BTN', 'CO', 'HJ'].includes(position);
+      // FIXED: Skip position advice for very weak hands (avoids contradiction)
+      if (isPreflop && strength === "very weak") {
+        // No position append
+      } else if (positionGood) {
+        tip += '\nGood position: More aggressive plays.';
+      } else {
+        tip += '\nTough position: Tighten up.';
+      }
+      if (to_call > 0) {
+        if (parseFloat(equity) > threshold) {
+          tip += '\nFavorable odds: Proceed.';
+        } else {
+          tip += '\nPoor odds: Re-evaluate.';
+        }
+      }
+      return tip;
+    };
+    const App = () => {
+      const [players, setPlayers] = useState([]);
+      const [deck, setDeck] = useState([]);
+      const [community, setCommunity] = useState([]);
+      const [numCpuPlayers, setNumCpuPlayers] = useState(1);
+      const [pot, setPot] = useState(0);
+      const potRef = useRef(0);
+      const [lastPot, setLastPot] = useState(0);
+      const [gameInProgress, setGameInProgress] = useState(false);
+      const [stageIndex, setStageIndex] = useState(0);
+      const [roundActive, setRoundActive] = useState(false);
+      const [currentPlayerIndex, setCurrentPlayerIndex] = useState(0);
+      const [roundFirstPlayer, setRoundFirstPlayer] = useState(0);
+      const [currentBet, setCurrentBet] = useState(0);
+      const [minRaiseSize, setMinRaiseSize] = useState(bigBlind);
+      const [revealedCommunityCount, setRevealedCommunityCount] = useState(0);
+      const [lastOpponentActions, setLastOpponentActions] = useState([]);
+      const [dealerIndex, setDealerIndex] = useState(0);
+      const [isProcessing, setIsProcessing] = useState(false);
+      const [lastRaiserIndex, setLastRaiserIndex] = useState(null);
+      const [statusLog, setStatusLog] = useState([]);
+      const [gtoTip, setGtoTip] = useState("Select number of players and start the game...");
+      const [opponentThoughts, setOpponentThoughts] = useState("Waiting for game to start...");
+      const [animatedChips, setAnimatedChips] = useState([]);
+      const [lastWinners, setLastWinners] = useState([]);
+      const tipController = useRef(null);
+      const statusRef = useRef(null);
+      const positions = getPlayerPositions(players.length || 6);
+      useEffect(() => {
+        if (statusRef.current) {
+          statusRef.current.scrollTop = statusRef.current.scrollHeight;
+        }
+      }, [statusLog]);
+      const safeAbort = () => {
+        if (tipController.current) {
+          const controller = tipController.current;
+          tipController.current = null;
+          try {
+            controller.abort();
+          } catch (e) {
+            console.warn('Abort failed:', e);
+          }
+        }
+      };
+      const fetchTip = async () => {
+        if (!gameInProgress || !roundActive || currentPlayerIndex !== 0) return;
+        safeAbort();
+        setGtoTip("...Generating tip...");
+        const features = {
+          hand: players[0]?.cards || [],
+          community: community.slice(0, revealedCommunityCount),
+          pot,
+          chips: players[0]?.chips || 1000,
+          current_bet: currentBet,
+          to_call: currentBet - (players[0]?.contribution || 0),
+          min_raise_size: minRaiseSize,
+          num_players: players.length,
+          stage: stages[stageIndex],
+          position: players[0]?.position || "SB",
+          opponent_actions: lastOpponentActions
+        };
+        tipController.current = new AbortController();
+        const timeout = setTimeout(() => safeAbort(), 50000);
+        try {
+          const response = await fetch("http://127.0.0.1:8000/gto_tip", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              hand: players[0]?.cards || ["-", "-"],
+              community: community.slice(0, revealedCommunityCount) || [],
+              opponent_actions: lastOpponentActions || [],
+              pot,
+              min_raise_size: minRaiseSize,
+              contribution: players[0]?.contribution || 0,
+              chips: players[0]?.chips || 1000,
+              to_call: currentBet - players[0].contribution,
+              num_active_players: players.filter(p => !p.folded && p.chips > 0).length,
+              stage: stages[stageIndex],
+              position: players[0]?.position || "",
+              current_bet: currentBet,
+              num_players: players.length
+            }),
+            signal: tipController.current.signal
+          });
+          clearTimeout(timeout);
+          if (!gameInProgress || !roundActive || currentPlayerIndex !== 0) {
+            setGtoTip("Tip canceled due to game state change.");
+            return;
+          }
+          const { gto_tip, tip } = await response.json();
+          const serverTip = (gto_tip || tip || "Tip unavailable");
+          setGtoTip(serverTip);
+        } catch (e) {
+          clearTimeout(timeout);
+          if (!gameInProgress || !roundActive || currentPlayerIndex !== 0) {
+            setGtoTip("Tip canceled due to game state change.");
+            return;
+          }
+          console.log("Server unavailable, using heuristic");
+          if (e.name !== 'AbortError') {
+            const heuristic = heuristicTip(features);
+            setGtoTip(`${heuristic}`);
+          } else {
+            setGtoTip("Tip aborted.");
+          }
+        } finally {
+          safeAbort(); // Ensure cleanup
+        }
+      };
+      const animateBet = (playerIndex, amount) => {
+        const pos = positions[playerIndex];
+        const numChips = Math.max(1, Math.floor(amount / 25));
+        for (let i = 0; i < numChips; i++) {
+          const id = Date.now() + Math.random() * 1000 + i;
+          setAnimatedChips(prev => [...prev, { id, x: pos.x, y: pos.y, stage: 'initial' }]);
+          setTimeout(() => {
+            setAnimatedChips(prev => prev.map(c => c.id === id ? { ...c, stage: 'moving' } : c));
+            setTimeout(() => {
+              setAnimatedChips(prev => prev.map(c => c.id === id ? { ...c, stage: 'fading' } : c));
+              setTimeout(() => {
+                setAnimatedChips(prev => prev.filter(c => c.id !== id));
+              }, 300);
+            }, 600);
+          }, i * 150);
+        }
+      };
+      const assignPositions = (currentPlayers, dealerIdx) => {
+        const len = currentPlayers.length;
+        const sbIndex = (dealerIdx + 1) % len;
+        return currentPlayers.map((p, i) => {
+          const offset = (i - sbIndex + len) % len;
+          let position;
+          if (offset === 0) position = "SB";
+          else if (offset === 1) position = "BB";
+          else if (offset === len - 2) position = "CO";
+          else if (offset === len - 1) position = "BTN";
+          else position = `UTG+${offset - 2}`;
+          return { ...p, position };
+        });
+      };
+      const getNextPlayerIndex = (currentIndex, currentPlayers, currBet, roundFirstPlayer) => {
+        const len = currentPlayers.length;
+        const activeCount = currentPlayers.filter(p => !p.folded && p.chips > 0).length;
+        let nextIndex;
+        let circled = 0;
+        const sbIndex = (dealerIndex + 1) % len;
+        const bbIndex = (dealerIndex + 2) % len;
+        if (currBet === 0) {
+          // Check round
+          nextIndex = (currentIndex + 1) % len;
+          while (circled < len) {
+            const p = currentPlayers[nextIndex];
+            if (p && !p.folded && p.chips > 0) {
+              if (nextIndex === roundFirstPlayer) {
+                return { nextIndex: -1, activeCount };
+              }
+              return { nextIndex, activeCount };
+            }
+            nextIndex = (nextIndex + 1) % len;
+            circled++;
+          }
+          return { nextIndex: -1, activeCount };
+        } else {
+          // Bet/raise round
+          nextIndex = (currentIndex + 1) % len;
+          while (circled < len) {
+            const p = currentPlayers[nextIndex];
+            if (!p || p.folded || p.chips <= 0) {
+              nextIndex = (nextIndex + 1) % len;
+              circled++;
+              continue;
+            }
+            if (p.contribution < currBet || (stageIndex === 0 && currBet === bigBlind && nextIndex === bbIndex && currentIndex === sbIndex)) {
+              return { nextIndex, activeCount };
+            }
+            nextIndex = (nextIndex + 1) % len;
+            circled++;
+          }
+          return { nextIndex: -1, activeCount };
+        }
+      };
+      const logStatus = (msg, highlight = false, playerIndex = null) => {
+        const classes = {
+          win: playerIndex === 0 ? "status-win" : "status-loss",
+          fold: playerIndex === 0 ? "status-loss" : "status-win",
+          lose: playerIndex === 0 ? "status-loss" : "status-win",
+          action: playerIndex === 0 ? "status-player" : playerIndex > 0 ? "status-opponent" : "status-neutral",
+          pot: "status-pot",
+          error: "status-error",
+          tie: "status-tie"
+        };
+        const messageClass = msg.includes("win") ? classes.win :
+                            msg.includes("fold") || msg.includes("lose") ? classes.fold :
+                            msg.includes("call") || msg.includes("check") || msg.includes("bet") || msg.includes("raise") ? classes.action :
+                            msg.includes("Pot ") || msg.includes("Blinds posted") ? classes.pot :
+                            msg.includes("error") || msg.includes("Cannot") ? classes.error :
+                            msg.includes("Pot is split") ? classes.tie : "status-neutral";
+        setStatusLog(prev => [...prev, { msg, className: messageClass, highlight }]);
+      };
+      const updateOpponentThoughts = () => {
+        let thoughts = !gameInProgress ? "Waiting for the next hand..." : "";
+        if (gameInProgress) {
+          for (let i = 1; i < players.length; i++) {
+            if (!players[i] || players[i].folded || players[i].chips <= 0) continue;
+            const potOdds = pot / (pot + (currentBet - players[i].contribution));
+            const handStrength = estimateOpponentHandStrength(i);
+            const stage = stages[stageIndex];
+            thoughts += `Player ${i}:\n${stage === "Pre-flop" ?
+              `Assessing position (${players[i].position}).\n${handStrength > 0.7 ? "Confident with my cards." : handStrength > 0.4 ? "Decent hand, let's see the flop." : "Not great cards, but blinds are low."}` :
+              `Community shows ${evaluateHand(community.slice(0, revealedCommunityCount)).rank}.\n${handStrength > 0.7 ? "Strong board for me." : handStrength > 0.4 ? "Board's okay, could improve." : "Board isn't great."}\n`
+            }${pot > 500 ? "Big pot, playing cautiously.\n" : pot > 200 ? "Decent pot, worth fighting.\n" : ""}${currentBet > players[i].contribution ?
+              `Current bet: $${currentBet}. Call or raise?\n${potOdds > 0.3 ? "Pot odds tough, might stay." : "Good pot odds, tempted to call."}\n` :
+              players[i].contribution === currentBet ? "We're even, waiting for next move.\n" : ""}\n`;
+          }
+        }
+        setOpponentThoughts(thoughts);
+      };
+      const estimateOpponentHandStrength = (playerIndex) => {
+        let strength = Math.random() * 0.5 + (stageIndex > 0 ? ["High Card","One Pair","Two Pair","Three of a Kind","Straight","Flush","Full House","Four of a Kind","Straight Flush"].indexOf(evaluateHand(community.slice(0, revealedCommunityCount)).rank) * 0.1 : 0.2);
+        return Math.min(strength, 1.0);
+      };
+      const startGame = () => {
+        if (isNaN(numCpuPlayers) || numCpuPlayers < 1 || numCpuPlayers > 10) {
+          logStatus("Please select 1 to 10 CPU players.", true);
+          return;
+        }
+        const newPlayers = [
+          { id: 0, chips: 1000, cards: [], contribution: 0, folded: false, position: "", busted: false },
+          ...Array(numCpuPlayers).fill().map((_, i) => ({
+            id: i + 1,
+            chips: 1000,
+            cards: [],
+            contribution: 0,
+            folded: false,
+            position: "",
+            busted: false
+          }))
+        ];
+        const initialDealer = newPlayers.length - 1;
+        const positionedPlayers = assignPositions(newPlayers, initialDealer);
+        setPlayers(positionedPlayers);
+        setDealerIndex(initialDealer);
+        setGameInProgress(true);
+        setStatusLog([]);
+        setGtoTip("Preparing game...");
+        setOpponentThoughts("Waiting for game to start...");
+        setPot(0);
+        potRef.current = 0;
+        setLastPot(0);
+        setStageIndex(0);
+        setRevealedCommunityCount(0);
+        setLastOpponentActions(Array(newPlayers.length).fill(""));
+        setLastWinners([]);
+        setAnimatedChips([]);
+        setButtons(true, false);
+      };
+      const deal = () => {
+        if (isProcessing || roundActive) {
+          logStatus("Cannot deal: Game not ready.", true);
+          return;
+        }
+        setIsProcessing(true);
+        setLastWinners([]);
+        try {
+          const newDeck = createDeck();
+          shuffle(newDeck);
+          const newPlayers = players.map(p => ({
+            ...p,
+            cards: !p.busted ? [newDeck.pop(), newDeck.pop()] : [],
+            contribution: 0,
+            folded: p.busted
+          }));
+          const newCommunity = Array(5).fill().map(() => newDeck.pop());
+          let sbIndex = (dealerIndex + 1) % newPlayers.length;
+          let attempts = 0;
+          while (newPlayers[sbIndex].busted && attempts < newPlayers.length) {
+            sbIndex = (sbIndex + 1) % newPlayers.length;
+            attempts++;
+          }
+          if (attempts >= newPlayers.length - 1) {
+            logStatus("Cannot post blinds. Ending game.", true);
+            setGameInProgress(false);
+            setIsProcessing(false);
+            return;
+          }
+          let bbIndex = (sbIndex + 1) % newPlayers.length;
+          attempts = 0;
+          while (newPlayers[bbIndex].busted && attempts < newPlayers.length) {
+            bbIndex = (bbIndex + 1) % newPlayers.length;
+            attempts++;
+          }
+          if (sbIndex === bbIndex || attempts >= newPlayers.length - 1) {
+            logStatus("Cannot post big blind. Ending game.", true);
+            setGameInProgress(false);
+            setIsProcessing(false);
+            return;
+          }
+          if (sbIndex === bbIndex) throw new Error("Invalid blind positions");
+          const sb = Math.min(newPlayers[sbIndex].chips, smallBlind);
+          const bb = Math.min(newPlayers[bbIndex].chips, bigBlind);
+          let originalSbChips = newPlayers[sbIndex].chips;
+          let originalBbChips = newPlayers[bbIndex].chips;
+          newPlayers[sbIndex] = { ...newPlayers[sbIndex], chips: newPlayers[sbIndex].chips - sb, contribution: sb };
+          newPlayers[bbIndex] = { ...newPlayers[bbIndex], chips: newPlayers[bbIndex].chips - bb, contribution: bb };
+          const newPot = sb + bb;
+          const newLastOpponentActions = Array(newPlayers.length).fill("");
+          if (sb > 0) newLastOpponentActions[sbIndex] = `posted small blind of ${sb}`;
+          if (bb > 0) newLastOpponentActions[bbIndex] = `posted big blind of ${bb}`;
+          setPlayers(newPlayers);
+          setDeck(newDeck);
+          setCommunity(newCommunity);
+          setPot(newPot);
+          potRef.current = newPot;
+          setLastPot(newPot);
+          setStageIndex(0);
+          setRevealedCommunityCount(0);
+          setLastOpponentActions(newLastOpponentActions);
+          setCurrentBet(bigBlind);
+          setMinRaiseSize(bigBlind);
+          setStatusLog([]);
+          const sbName = sbIndex === 0 ? "You" : `Player ${sbIndex}`;
+          const bbName = bbIndex === 0 ? "You" : `Player ${bbIndex}`;
+          const sbAllIn = newPlayers[sbIndex].chips === 0;
+          const bbAllIn = newPlayers[bbIndex].chips === 0;
+          logStatus(`Blinds posted: ${sbName} (SB) $${sb}${sbAllIn ? ' (all-in)' : ''}, ${bbName} (BB) $${bb}${bbAllIn ? ' (all-in)' : ''}. Pot is $${newPot}`);
+          if (sb > 0) animateBet(sbIndex, sb);
+          setTimeout(() => { if (bb > 0) animateBet(bbIndex, bb); }, 300);
+          logPlayerHand(newPlayers, 0, newCommunity);
+          const participatingCount = newPlayers.filter(p => !p.folded).length;
+          if (participatingCount <= 1) {
+            logStatus("Only one participating player after blinds. Ending hand.");
+            setRoundActive(false);
+            endHand(newPlayers, determineWinner(newPlayers));
+            setIsProcessing(false);
+            return;
+          }
+          const canActCount = newPlayers.filter(p => !p.folded && p.chips > 0).length;
+          if (canActCount === 0) {
+            logStatus("All participating players are all-in after blinds. Proceeding to showdown.");
+            setRevealedCommunityCount(5);
+            logPlayerHand(newPlayers, 5);
+            endHand(newPlayers, determineWinner(newPlayers));
+            setIsProcessing(false);
+            return;
+          }
+          let newCurrentPlayerIndex = (bbIndex + 1) % newPlayers.length;
+          let attempts2 = 0;
+          while (attempts2 < newPlayers.length) {
+            if (!newPlayers[newCurrentPlayerIndex]?.folded && newPlayers[newCurrentPlayerIndex]?.chips > 0) {
+              break;
+            }
+            newCurrentPlayerIndex = (newCurrentPlayerIndex + 1) % newPlayers.length;
+            attempts2++;
+          }
+          setRoundActive(true);
+          setRoundFirstPlayer(newCurrentPlayerIndex);
+          setLastRaiserIndex(bbIndex);
+          setCurrentPlayerIndex(newCurrentPlayerIndex);
+          logStatus(`${stages[0]} betting round begins. ${newCurrentPlayerIndex === 0 ? 'Your' : 'Player '+newCurrentPlayerIndex+'\'s'} turn first.`);
+          setButtons(false, newCurrentPlayerIndex === 0);
+          setIsProcessing(false);
+          updateOpponentThoughts();
+        } catch (e) {
+          setIsProcessing(false);
+          logStatus(`Error in deal: ${e.message}`, true);
+        }
+      };
+      const logPlayerHand = (currentPlayers = players, commCount = revealedCommunityCount, commCards = community) => {
+        if (!gameInProgress || !currentPlayers[0]?.cards || currentPlayers[0].cards.length !== 2) {
+          return;
+        }
+        const draws = detectDraws(currentPlayers[0].cards, commCards.slice(0, commCount));
+        const visibleCards = currentPlayers[0].cards.concat(commCards.slice(0, commCount));
+        const handEval = evaluateHand(visibleCards);
+        let handDesc = currentPlayers[0].cards.join(", ");
+        if (draws.primaryDraw) {
+          handDesc += ` (${draws.primaryDraw})`;
+        } else {
+          handDesc += ` (${handEval.rank}${draws.pairDesc || ''})`;
+        }
+        logStatus(`Your current hand: ${handDesc}`, false, 0);
+      };
+      const handleRoundComplete = (updatedPlayers) => {
+        setRoundActive(false);
+        setLastRaiserIndex(null);
+        logStatus(`Betting round complete. Advancing stage.`);
+        advanceStage(updatedPlayers);
+      };
+      const handleNextPlayer = (nextIndex, updatedPlayers) => {
+        setCurrentPlayerIndex(nextIndex);
+        setPlayers(updatedPlayers);
+        setButtons(false, nextIndex === 0);
+      };
+      const opponentAction = (playerIndex) => {
+        if (!roundActive || isProcessing || stageIndex !== stages.indexOf(stages[stageIndex])) {
+          const { nextIndex } = getNextPlayerIndex(currentPlayerIndex, players, currentBet, roundFirstPlayer);
+          setIsProcessing(false);
+          if (nextIndex === -1) {
+            handleRoundComplete(players);
+          } else {
+            handleNextPlayer(nextIndex, players);
+          }
+          return;
+        }
+        if (players[playerIndex]?.folded || players[playerIndex]?.chips <= 0) {
+          const { nextIndex } = getNextPlayerIndex(playerIndex, players, currentBet, roundFirstPlayer);
+          setIsProcessing(false);
+          if (nextIndex === -1) {
+            handleRoundComplete(players);
+          } else {
+            handleNextPlayer(nextIndex, players);
+          }
+          return;
+        }
+        setIsProcessing(true);
+        const toCall = currentBet - players[playerIndex].contribution;
+        const minPay = toCall + minRaiseSize;
+        let updatedPlayers = [...players];
+        let updatedLastOpponentActions = [...lastOpponentActions];
+        let newCurrBet = currentBet;
+        const choice = Math.random();
+        let actionTaken = false;
+        if (toCall > 0) {
+          if (choice < 0.6 && players[playerIndex].chips >= toCall) {
+            const callAmt = Math.min(toCall, players[playerIndex].chips);
+            updatedPlayers[playerIndex] = {
+              ...updatedPlayers[playerIndex],
+              chips: updatedPlayers[playerIndex].chips - callAmt,
+              contribution: updatedPlayers[playerIndex].contribution + callAmt
+            };
+            potRef.current += callAmt;
+            setPot(potRef.current);
+            logStatus(`Player ${playerIndex} calls $${callAmt}`, false, playerIndex);
+            updatedLastOpponentActions[playerIndex] = `called $${callAmt}`;
+            animateBet(playerIndex, callAmt);
+            actionTaken = true;
+          } else if (choice < 0.8 && players[playerIndex].chips >= minPay) {
+            let raiseAmt = minPay + Math.floor(Math.random() * 50);
+            raiseAmt = Math.min(raiseAmt, players[playerIndex].chips);
+            const totalPut = players[playerIndex].contribution + raiseAmt;
+            updatedPlayers[playerIndex] = {
+              ...updatedPlayers[playerIndex],
+              chips: updatedPlayers[playerIndex].chips - raiseAmt,
+              contribution: totalPut
+            };
+            newCurrBet = totalPut;
+            setCurrentBet(newCurrBet);
+            potRef.current += raiseAmt;
+            setPot(potRef.current);
+            logStatus(`Player ${playerIndex} raises to $${totalPut}`, false, playerIndex);
+            updatedLastOpponentActions[playerIndex] = `raised to $${totalPut}`;
+            const additional = raiseAmt - toCall;
+            setMinRaiseSize(additional);
+            setLastRaiserIndex(playerIndex);
+            animateBet(playerIndex, raiseAmt);
+            actionTaken = true;
+          } else {
+            updatedPlayers[playerIndex] = { ...updatedPlayers[playerIndex], folded: true };
+            logStatus(`Player ${playerIndex} folds.`, true, playerIndex);
+            updatedLastOpponentActions[playerIndex] = `folded`;
+          }
+        } else {
+          if (choice < 0.7 || players[playerIndex].chips < minPay) {
+            logStatus(`Player ${playerIndex} checks.`, false, playerIndex);
+            updatedLastOpponentActions[playerIndex] = `checked`;
+            actionTaken = true;
+          } else {
+            let betAmt = minPay + Math.floor(Math.random() * 50);
+            betAmt = Math.min(betAmt, players[playerIndex].chips);
+            const totalPut = players[playerIndex].contribution + betAmt;
+            updatedPlayers[playerIndex] = {
+              ...updatedPlayers[playerIndex],
+              chips: players[playerIndex].chips - betAmt,
+              contribution: totalPut
+            };
+            newCurrBet = totalPut;
+            setCurrentBet(newCurrBet);
+            potRef.current += betAmt;
+            setPot(potRef.current);
+            logStatus(`Player ${playerIndex} bets $${betAmt}`, false, playerIndex);
+            updatedLastOpponentActions[playerIndex] = `bet $${betAmt}`;
+            setMinRaiseSize(betAmt);
+            setLastRaiserIndex(playerIndex);
+            animateBet(playerIndex, betAmt);
+            actionTaken = true;
+          }
+        }
+        setPlayers(updatedPlayers);
+        setLastOpponentActions(updatedLastOpponentActions);
+        setIsProcessing(false);
+        updateOpponentThoughts();
+        const { nextIndex } = getNextPlayerIndex(playerIndex, updatedPlayers, newCurrBet, roundFirstPlayer);
+        if (nextIndex === -1) {
+          handleRoundComplete(updatedPlayers);
+        } else {
+          handleNextPlayer(nextIndex, updatedPlayers);
+        }
+      };
+      const advanceStage = (updatedPlayers) => {
+        setLastRaiserIndex(null);
+        if (isProcessing) return;
+        setIsProcessing(true);
+        try {
+          const activeCount = updatedPlayers.filter(p => !p.folded).length;
+          logStatus(`Advancing to stage ${stages[stageIndex + 1] || "end"}. Active players: ${activeCount}`);
+          if (activeCount <= 1) {
+            setPlayers(updatedPlayers);
+            endHand(updatedPlayers, determineWinner(updatedPlayers));
+            setIsProcessing(false);
+            return;
+          }
+          const canBetCount = updatedPlayers.filter(p => !p.folded && p.chips > 0).length;
+          if (canBetCount === 0) {
+            logStatus("All remaining players are all-in. Revealing all community cards and ending hand.");
+            setRevealedCommunityCount(5);
+            logPlayerHand(updatedPlayers, 5);
+            endHand(updatedPlayers, determineWinner(updatedPlayers));
+            setIsProcessing(false);
+            return;
+          }
+          let newCurrentPlayerIndex = (dealerIndex + 1) % players.length;
+          let attempts = 0;
+          while (attempts < players.length) {
+            if (!updatedPlayers[newCurrentPlayerIndex]?.folded && updatedPlayers[newCurrentPlayerIndex]?.chips > 0) {
+              break;
+            }
+            newCurrentPlayerIndex = (newCurrentPlayerIndex + 1) % players.length;
+            attempts++;
+          }
+          let resetPlayers;
+          if (stageIndex === 0) {
+            logStatus(`Flop revealed: ${community.slice(0,3).join(", ")}`);
+            setRevealedCommunityCount(3);
+            logPlayerHand(updatedPlayers, 3);
+            logStatus(`Pot is $${potRef.current}`);
+            resetPlayers = updatedPlayers.map(p => ({ ...p, contribution: 0 }));
+            setCurrentBet(0);
+            setMinRaiseSize(bigBlind);
+          } else if (stageIndex === 1) {
+            logStatus(`Turn revealed: ${community[3]}`);
+            setRevealedCommunityCount(4);
+            logPlayerHand(updatedPlayers, 4);
+            logStatus(`Pot is $${potRef.current}`);
+            resetPlayers = updatedPlayers.map(p => ({ ...p, contribution: 0 }));
+            setCurrentBet(0);
+            setMinRaiseSize(bigBlind);
+          } else if (stageIndex === 2) {
+            logStatus(`River revealed: ${community[4]}`);
+            setRevealedCommunityCount(5);
+            logPlayerHand(updatedPlayers, 5);
+            logStatus(`Pot is $${potRef.current}`);
+            resetPlayers = updatedPlayers.map(p => ({ ...p, contribution: 0 }));
+            setCurrentBet(0);
+            setMinRaiseSize(bigBlind);
+          } else {
+            setIsProcessing(false);
+            endHand(updatedPlayers, determineWinner(updatedPlayers));
+            return;
+          }
+          setPlayers(resetPlayers);
+          setStageIndex(prev => prev + 1);
+          setRoundActive(true);
+          setRoundFirstPlayer(newCurrentPlayerIndex);
+          setCurrentPlayerIndex(newCurrentPlayerIndex);
+          logStatus(`${stages[stageIndex + 1]} betting round begins. ${newCurrentPlayerIndex === 0 ? 'Your' : 'Player '+newCurrentPlayerIndex+'\'s'} turn first.`);
+          setButtons(false, newCurrentPlayerIndex === 0);
+          setIsProcessing(false);
+          updateOpponentThoughts();
+        } catch (e) {
+          logStatus(`Error in advanceStage: ${e.message}`, true);
+          setIsProcessing(false);
+        }
+      };
+      const playerAction = (action, amount = 0) => {
+        if (!roundActive || isProcessing || currentPlayerIndex !== 0 || stageIndex !== stages.indexOf(stages[stageIndex])) {
+          setIsProcessing(false);
+          logStatus(`Cannot perform action: Invalid state or stage.`, true, 0);
+          return;
+        }
+        if (players[0].chips <= 0 && !players[0].folded) {
+          logStatus("You are all-in and cannot act further.", true, 0);
+          setIsProcessing(false);
+          const { nextIndex } = getNextPlayerIndex(0, players, currentBet, roundFirstPlayer);
+          if (nextIndex === -1) {
+            handleRoundComplete(players);
+          } else {
+            handleNextPlayer(nextIndex, players);
+          }
+          return;
+        }
+        safeAbort();
+        setIsProcessing(true);
+        const toCall = currentBet - players[0].contribution;
+        const minPay = toCall + minRaiseSize;
+        let updatedPlayers = [...players];
+        let updatedLastOpponentActions = [...lastOpponentActions];
+        let newCurrBet = currentBet;
+        if (action === "check" && toCall > 0) {
+          logStatus("Cannot check: Must call, raise, or fold.", true, 0);
+          setIsProcessing(false);
+          return;
+        }
+        switch(action) {
+          case "fold":
+            updatedPlayers[0] = { ...updatedPlayers[0], folded: true };
+            logStatus("You fold.", true, 0);
+            updatedLastOpponentActions[0] = "folded";
+            break;
+          case "check":
+            logStatus("You check.", false, 0);
+            updatedLastOpponentActions[0] = "checked";
+            break;
+          case "call":
+            const callAmt = Math.min(toCall, players[0].chips);
+            updatedPlayers[0] = {
+              ...updatedPlayers[0],
+              chips: players[0].chips - callAmt,
+              contribution: players[0].contribution + callAmt
+            };
+            potRef.current += callAmt;
+            setPot(potRef.current);
+            logStatus(`You call $${callAmt}`, false, 0);
+            updatedLastOpponentActions[0] = `called $${callAmt}`;
+            newCurrBet = currentBet;
+            animateBet(0, callAmt);
+            break;
+          case "bet":
+          case "raise":
+            if (amount < minPay) {
+              logStatus(`Bet/raise must be at least $${minPay}.`, true, 0);
+              setIsProcessing(false);
+              return;
+            }
+            if (amount > players[0].chips) {
+              logStatus(`Cannot bet $${amount}, you have $${players[0].chips} chips.`, true, 0);
+              setIsProcessing(false);
+              return;
+            }
+            const totalPut = players[0].contribution + amount;
+            updatedPlayers[0] = {
+              ...updatedPlayers[0],
+              chips: players[0].chips - amount,
+              contribution: totalPut
+            };
+            newCurrBet = totalPut;
+            setCurrentBet(newCurrBet);
+            potRef.current += amount;
+            setPot(potRef.current);
+            logStatus(`${action === "bet" ? "You bet" : "You raise to"} $${totalPut}`, false, 0);
+            updatedLastOpponentActions[0] = `${action === "bet" ? "bet" : "raised to"} $${totalPut}`;
+            const increase = amount - toCall;
+            setMinRaiseSize(increase);
+            setLastRaiserIndex(0);
+            animateBet(0, amount);
+            break;
+        }
+        setPlayers(updatedPlayers);
+        setLastOpponentActions(updatedLastOpponentActions);
+        setIsProcessing(false);
+        updateOpponentThoughts();
+        const { nextIndex } = getNextPlayerIndex(0, updatedPlayers, newCurrBet, roundFirstPlayer);
+        if (nextIndex === -1) {
+          handleRoundComplete(updatedPlayers);
+        } else {
+          handleNextPlayer(nextIndex, updatedPlayers);
+        }
+      };
+      const playerCheckOrCall = () => {
+        if (isProcessing || !roundActive || currentPlayerIndex !== 0 || stageIndex !== stages.indexOf(stages[stageIndex])) {
+          setIsProcessing(false);
+          logStatus(`Cannot perform action: Invalid state or stage.`, true, 0);
+          return;
+        }
+        if (players[0].chips <= 0 && !players[0].folded) {
+          logStatus("You are all-in and cannot act further.", true, 0);
+          setIsProcessing(false);
+          const { nextIndex } = getNextPlayerIndex(0, players, currentBet, roundFirstPlayer);
+          if (nextIndex === -1) {
+            handleRoundComplete(players);
+          } else {
+            handleNextPlayer(nextIndex, players);
+          }
+          return;
+        }
+        safeAbort();
+        setGtoTip("Action taken.");
+        setIsProcessing(true);
+        try {
+          const toCall = currentBet - players[0].contribution;
+          let updatedPlayers = [...players];
+          let updatedLastOpponentActions = [...lastOpponentActions];
+          let newCurrBet = currentBet;
+          if (toCall > 0) {
+            const callAmt = Math.min(toCall, players[0].chips);
+            updatedPlayers[0] = {
+              ...updatedPlayers[0],
+              chips: players[0].chips - callAmt,
+              contribution: players[0].contribution + callAmt
+            };
+            potRef.current += callAmt;
+            setPot(potRef.current);
+            logStatus(`You call $${callAmt}`, false, 0);
+            updatedLastOpponentActions[0] = `called $${callAmt}`;
+            animateBet(0, callAmt);
+          } else {
+            logStatus("You check.", false, 0);
+            updatedLastOpponentActions[0] = "checked";
+          }
+          setPlayers(updatedPlayers);
+          setLastOpponentActions(updatedLastOpponentActions);
+          setIsProcessing(false);
+          const { nextIndex } = getNextPlayerIndex(0, updatedPlayers, newCurrBet, roundFirstPlayer);
+          if (nextIndex === -1) {
+            handleRoundComplete(updatedPlayers);
+          } else {
+            handleNextPlayer(nextIndex, updatedPlayers);
+          }
+          updateOpponentThoughts();
+        } catch (e) {
+          logStatus(`Error in playerCheckOrCall: ${e.message}`, true);
+          setIsProcessing(false);
+        }
+      };
+      const debouncedPlayerBetPrompt = () => {
+        if (isProcessing || !roundActive || currentPlayerIndex !== 0 || stageIndex !== stages.indexOf(stages[stageIndex])) {
+          setIsProcessing(false);
+          logStatus(`Cannot perform action: Invalid state or stage.`, true, 0);
+          return;
+        }
+        if (players[0].chips <= 0 && !players[0].folded) {
+          logStatus("You are all-in and cannot act further.", true, 0);
+          setIsProcessing(false);
+          const { nextIndex } = getNextPlayerIndex(0, players, currentBet, roundFirstPlayer);
+          if (nextIndex === -1) {
+            handleRoundComplete(players);
+          } else {
+            handleNextPlayer(nextIndex, players);
+          }
+          return;
+        }
+        safeAbort();
+        setGtoTip("Action taken.");
+        setIsProcessing(true);
+        try {
+          const toCall = currentBet - players[0].contribution;
+          const minPay = toCall + minRaiseSize;
+          const input = prompt(`Enter bet amount (minimum $${minPay}):`, minPay);
+          if (!input || input.trim() === "") {
+            logStatus("Bet cancelled.", true, 0);
+            setIsProcessing(false);
+            return;
+          }
+          const amt = Math.floor(parseFloat(input));
+          if (isNaN(amt) || amt < minPay || amt <= 0) {
+            logStatus(`Bet must be a valid number at least $${minPay}.`, true, 0);
+            setIsProcessing(false);
+            return;
+          }
+          playerAction(currentBet > 0 ? 'raise' : 'bet', amt);
+        } catch (e) {
+          logStatus(`Error in debouncedPlayerBetPrompt: ${e.message}`, true);
+          setIsProcessing(false);
+        }
+      };
+      const determineWinner = (playersArg = players) => {
+        try {
+          const activePlayers = playersArg.filter(p => p && !p.folded);
+          if (activePlayers.length === 0) {
+            logStatus("Error: No active players to determine winner.", true);
+            return [];
+          }
+          if (activePlayers.length === 1) {
+            return [activePlayers[0].id];
+          }
+          const handRanks = ["High Card", "One Pair", "Two Pair", "Three of a Kind", "Straight", "Flush", "Full House", "Four of a Kind", "Straight Flush"];
+          const hands = activePlayers.map(p => ({
+            id: p.id,
+            hand: evaluateHand(p.cards.concat(community.slice(0, revealedCommunityCount))),
+            cards: p.cards.concat(community.slice(0, revealedCommunityCount))
+          }));
+          const maxRankIndex = Math.max(...hands.map(h => handRanks.indexOf(h.hand.rank)));
+          const bestHands = hands.filter(h => handRanks.indexOf(h.hand.rank) === maxRankIndex);
+          if (bestHands.length === 1) {
+            return [bestHands[0].id];
+          }
+          return compareHands(bestHands);
+        } catch (e) {
+          logStatus(`Error in determineWinner: ${e.message}`, true);
+          return [];
+        }
+      };
+      const compareHands = (hands) => {
+        try {
+          const handRanks = ["High Card", "One Pair", "Two Pair", "Three of a Kind", "Straight", "Flush", "Full House", "Four of a Kind", "Straight Flush"];
+          const rankIndex = handRanks.indexOf(hands[0].hand.rank);
+          if (rankIndex === -1) {
+            logStatus("Error: Invalid hand rank in compareHands.", true);
+            return hands.map(h => h.id);
+          }
+          const compareValues = (values) => {
+            for (let i = 0; i < values[0].length; i++) {
+              const maxVal = Math.max(...values.map(v => v[i] || 0));
+              const best = hands.filter((h, j) => (values[j][i] || 0) === maxVal);
+              if (best.length === 1) {
+                return [best[0].id];
+              }
+              hands = best;
+              values = values.filter((v, j) => (v[i] || 0) === maxVal);
+            }
+            return hands.map(h => h.id);
+          };
+          if (hands[0].hand.rank === "One Pair") {
+            const pairValues = hands.map(h => h.hand.value);
+            const maxPair = Math.max(...pairValues);
+            const bestPairs = hands.filter(h => h.hand.value === maxPair);
+            if (bestPairs.length === 1) {
+              return [bestPairs[0].id];
+            }
+            const kickers = bestPairs.map(h => h.hand.kickers);
+            return compareValues(kickers);
+          } else if (hands[0].hand.rank === "Two Pair") {
+            const pairRanks = hands.map(h => {
+              const counts = {};
+              h.cards.forEach(c => {
+                const rv = rankValue[c.slice(0, -1)];
+                counts[rv] = (counts[rv] || 0) + 1;
+              });
+              const pairs = Object.entries(counts).filter(c => c[1] >= 2).map(c => parseInt(c[0])).sort((a, b) => b - a);
+              return { id: h.id, pairs: pairs.length >= 2 ? [pairs[0], pairs[1]] : [pairs[0], 0], kickers: h.hand.kickers };
+            });
+            const highPairs = pairRanks.map(pr => pr.pairs[0]);
+            const maxHighPair = Math.max(...highPairs);
+            const bestHighPairs = pairRanks.filter(pr => pr.pairs[0] === maxHighPair);
+            if (bestHighPairs.length === 1) {
+              return [bestHighPairs[0].id];
+            }
+            const lowPairs = bestHighPairs.map(pr => pr.pairs[1]);
+            const maxLowPair = Math.max(...lowPairs);
+            const bestLowPairs = bestHighPairs.filter(pr => pr.pairs[1] === maxLowPair);
+            if (bestLowPairs.length === 1) {
+              return [bestLowPairs[0].id];
+            }
+            const kickers = bestLowPairs.map(pr => pr.kickers);
+            return compareValues(kickers);
+          } else if (hands[0].hand.rank === "Three of a Kind") {
+            const tripValues = hands.map(h => h.hand.value);
+            const maxTrips = Math.max(...tripValues);
+            const bestTrips = hands.filter(h => h.hand.value === maxTrips);
+            if (bestTrips.length === 1) {
+              return [bestTrips[0].id];
+            }
+            const kickers = bestTrips.map(h => h.hand.kickers);
+            return compareValues(kickers);
+          } else {
+            const values = hands.map(h => [h.hand.value, ...h.hand.kickers]);
+            return compareValues(values);
+          }
+        } catch (e) {
+          logStatus(`Error in compareHands: ${e.message}`, true);
+          return hands.map(h => h.id);
+        }
+      };
+      const endHand = (updatedPlayers, winner) => {
+        try {
+          let msg = "";
+          const activePlayers = updatedPlayers.filter(p => p && !p.folded);
+          const totalPot = potRef.current;
+          if (totalPot <= 0) {
+            logStatus(`Error: Pot is empty or invalid. Pot: ${totalPot}`, true);
+            return;
+          }
+          const handEvals = updatedPlayers.map(p => ({
+            id: p.id,
+            hand: evaluateHand(p.cards.concat(community.slice(0, revealedCommunityCount))),
+            cards: p.cards
+          }));
+          if (!Array.isArray(winner) || winner.length === 0) {
+            logStatus("Error: Invalid winner determination.", true);
+            return;
+          }
+          let newPlayers;
+          if (winner.length > 1) {
+            const splitPot = Math.floor(totalPot / winner.length);
+            if (isNaN(splitPot) || splitPot <= 0) {
+              logStatus("Error: Invalid pot split calculation.", true);
+              return;
+            }
+            newPlayers = updatedPlayers.map(p => winner.includes(p.id) ? { ...p, chips: p.chips + splitPot, contribution: 0 } : { ...p, contribution: 0 });
+            msg = `Pot is split. Each winner (Players ${winner.join(", ")}) gets $${splitPot}.\n`;
+          } else {
+            newPlayers = updatedPlayers.map(p => p.id === winner[0] ? { ...p, chips: p.chips + totalPot, contribution: 0 } : { ...p, contribution: 0 });
+            msg = `${winner[0] === 0 ? 'You win' : 'Player '+winner[0]+' wins'} the pot of $${totalPot}!\n`;
+          }
+          activePlayers.forEach(p => {
+            const evalHand = handEvals.find(h => h.id === p.id).hand;
+            msg += `${p.id === 0 ? 'Your' : 'Player '+p.id+'\'s'} hand: ${p.cards.join(", ")} (${evalHand.rank})\n`;
+          });
+          if (revealedCommunityCount > 0) {
+            msg += `Community cards: ${community.slice(0, revealedCommunityCount).join(", ")}\n`;
+          }
+          logStatus(msg, true);
+          newPlayers.forEach(p => {
+            p.busted = p.chips <= 0;
+          });
+          setLastWinners(winner);
+          if (newPlayers[0].busted) {
+            logStatus("You are out of chips! Game over!", true);
+            setGameInProgress(false);
+            return;
+          }
+          const activeCount = newPlayers.filter(p => !p.busted).length;
+          if (activeCount <= 1) {
+            const winnerPlayer = newPlayers.find(p => !p.busted);
+            logStatus(`Game over! ${winnerPlayer.id === 0 ? 'You' : `Player ${winnerPlayer.id}`} win${winnerPlayer.id === 0 ? '' : 's'} with ${winnerPlayer.chips} chips!`, true);
+            setGameInProgress(false);
+            return;
+          }
+          let newDealerIndex = (dealerIndex + 1) % newPlayers.length;
+          let attempts = 0;
+          while (newPlayers[newDealerIndex].busted && attempts < newPlayers.length) {
+            newDealerIndex = (newDealerIndex + 1) % newPlayers.length;
+            attempts++;
+          }
+          const finalPlayers = assignPositions(newPlayers, newDealerIndex);
+          setPlayers(finalPlayers);
+          setDealerIndex(newDealerIndex);
+          potRef.current = 0;
+          setPot(0);
+          setLastPot(0);
+          setRoundActive(false);
+          setStageIndex(0);
+          setCurrentBet(0);
+          setMinRaiseSize(bigBlind);
+          setCurrentPlayerIndex(0);
+          setLastRaiserIndex(null);
+          setLastOpponentActions(Array(newPlayers.length).fill(""));
+          setAnimatedChips([]);
+          setButtons(true, false);
+          updateOpponentThoughts();
+        } catch (e) {
+          logStatus(`Error in endHand: ${e.message}`, true);
+        } finally {
+          setIsProcessing(false);
+        }
+      };
+      const setButtons = (newHand, actions) => {
+        setDealDisabled(!newHand);
+        setActionButtonsDisabled(!actions);
+      };
+      const [dealDisabled, setDealDisabled] = useState(false);
+      const [actionButtonsDisabled, setActionButtonsDisabled] = useState(true);
+      useEffect(() => {
+        if (!roundActive || isProcessing || currentPlayerIndex === undefined) return;
+        const canAct = players[currentPlayerIndex] && !players[currentPlayerIndex].folded && players[currentPlayerIndex].chips > 0;
+        if (canAct) {
+          if (currentPlayerIndex === 0) {
+            fetchTip();
+          } else {
+            setTimeout(() => opponentAction(currentPlayerIndex), 500);
+          }
+        } else {
+          const { nextIndex } = getNextPlayerIndex(currentPlayerIndex, players, currentBet, roundFirstPlayer);
+          if (nextIndex === -1) {
+            handleRoundComplete(players);
+          } else {
+            handleNextPlayer(nextIndex, players);
+          }
+        }
+      }, [currentPlayerIndex, roundActive, isProcessing, players, currentBet, roundFirstPlayer]);
+      return (
+        <div className="p-4 relative">
+          {!gameInProgress && (
+            <div className="text-center space-y-2">
+              <h1 className="text-4xl font-bold mb-4">Poker Hacker</h1>
+              <div className="flex justify-center items-center gap-2">
+                <label htmlFor="numPlayers">Number of CPU Players (1-10):</label>
+                <input
+                  type="number"
+                  id="numPlayers"
+                  min="1"
+                  max="10"
+                  value={numCpuPlayers}
+                  onChange={(e) => setNumCpuPlayers(parseInt(e.target.value) || 1)}
+                  className="text-black p-1 rounded"
+                />
+                <button
+                  className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded"
+                  onClick={startGame}
+                >
+                  Start Game
+                </button>
+              </div>
+            </div>
+          )}
+          {gameInProgress && (
+            <>
+              <div className="table-circle">
+                {players.map((p, i) => (
+                  <Player
+                    key={p.id}
+                    player={p}
+                    x={positions[i]?.x || 50}
+                    y={positions[i]?.y || 50}
+                    gameInProgress={gameInProgress}
+                    roundActive={roundActive}
+                    dealerIndex={dealerIndex}
+                    lastWinners={lastWinners}
+                  />
+                ))}
+                <div className="community-cards">
+                  {community.slice(0, revealedCommunityCount).map((c, i) => (
+                    <Card key={i} card={c} animate={true} />
+                  ))}
+                </div>
+                <Pot amount={pot} />
+                {animatedChips.map(({ id, x, y, stage }) => (
+                  <div
+                    key={id}
+                    className="chip"
+                    style={{
+                      position: 'absolute',
+                      left: stage === 'initial' ? `${x}%` : '50%',
+                      top: stage === 'initial' ? `${y}%` : '50%',
+                      transform: 'translate(-50%, -50%)',
+                      opacity: stage === 'fading' ? 0 : 1,
+                      zIndex: 20,
+                    }}
+                  />
+                ))}
+              </div>
+              <div className="left-panel">
+                <button
+                  className="bg-green-600 hover:bg-green-700 px-4 py-2 rounded disabled:opacity-50"
+                  onClick={deal}
+                  disabled={dealDisabled || roundActive}
+                >
+                  Deal
+                </button>
+                <button
+                  className="bg-green-600 hover:bg-green-700 px-4 py-2 rounded disabled:opacity-50"
+                  onClick={debouncedPlayerBetPrompt}
+                  disabled={actionButtonsDisabled}
+                >
+                  Bet / Raise
+                </button>
+                <button
+                  className="bg-green-600 hover:bg-green-700 px-4 py-2 rounded disabled:opacity-50"
+                  onClick={playerCheckOrCall}
+                  disabled={actionButtonsDisabled}
+                >
+                  {(stageIndex === 0 && players[0]?.position === "SB" && currentBet === bigBlind && players[0]?.contribution === smallBlind) || currentBet > players[0]?.contribution ? "Call" : "Check"}
+                </button>
+                <button
+                  className="bg-green-600 hover:bg-green-700 px-4 py-2 rounded disabled:opacity-50"
+                  onClick={() => playerAction('fold')}
+                  disabled={actionButtonsDisabled}
+                >
+                  Fold
+                </button>
+              </div>
+              <div className="right-panel">
+                <div ref={statusRef} className="status">
+                  {statusLog.map((log, i) => (
+                    <span key={i} className={log.className}>
+                      {log.highlight ? <b>{log.msg}</b> : log.msg}
+                      <br />
+                    </span>
+                  ))}
+                </div>
+                <div className="gto-panel">
+                  <h3>AI Coach</h3>
+                  <div className="thoughts">{gtoTip}</div>
+                </div>
+                <div className="thinking-panel">
+                  <h3>Opponents' Thoughts</h3>
+                  <div className="thoughts">{opponentThoughts}</div>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      );
+    };
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', () => {
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+      });
+    } else {
+      const root = ReactDOM.createRoot(document.getElementById('root'));
+      root.render(<App />);
+    }
+  </script>
+</body>
+</html>
