@@ -14,7 +14,7 @@ body {
   background: green;
   font-family: 'Zalando Sans Expanded', 'Open Sans', sans-serif;
   color: #fff;
-  padding: 20px;
+  padding: max(20px, env(safe-area-inset-top)); /* Handles mobile top bars/notches */
   position: relative;
   margin: 0;
   overflow-x: auto; /* Allow horizontal scroll if needed, but minimize it */
@@ -26,7 +26,7 @@ body {
   height: min(600px, 90vw);
   border-radius: 50%;
   background: radial-gradient(circle at center, #2f7a2f, #145214);
-  margin: 0 auto 1rem; /* Add bottom margin for mobile stacking */
+  margin: 1rem auto 1rem; /* Extra top/bottom margin for breathing room */
 }
 
 .player-seat {
@@ -152,6 +152,11 @@ body {
   max-width: 150px; /* Narrower for buttons */
 }
 
+.left-panel button {
+  flex: 1; /* Even spacing when horizontal */
+  min-width: 100px; /* Base width for desktop */
+}
+
 .dealer-button {
   width: 30px;
   height: 30px;
@@ -183,11 +188,12 @@ body {
 /* Tablet adjustments (≤1024px) */
 @media (max-width: 1024px) {
   body {
-    padding: 15px;
+    padding: max(15px, env(safe-area-inset-top));
   }
   .table-circle {
     width: min(500px, 85vw);
     height: min(500px, 85vw);
+    margin-top: 1rem; /* Extra top space */
   }
   .player-seat {
     min-width: 70px;
@@ -201,12 +207,16 @@ body {
 /* Mobile adjustments (≤768px) */
 @media (max-width: 768px) {
   body {
-    padding: 10px;
+    padding: max(10px, env(safe-area-inset-top));
+  }
+  .p-4 { /* Target the root div class from JSX */
+    padding: 0.5rem;
+    margin-top: 0.5rem; /* Extra top push-down */
   }
   .table-circle {
     width: 85vw;
     height: 85vw;
-    margin-bottom: 1rem;
+    margin: 0.5rem auto 1rem; /* Balanced margins */
   }
   .player-seat {
     min-width: 60px; /* Tighter seats */
@@ -238,9 +248,6 @@ body {
     right: auto !important;
     top: auto !important;
     display: flex;
-    flex-direction: row; /* Buttons horizontal on small mobile */
-    justify-content: center;
-    gap: 10px;
     margin: 10px 0;
     padding: 0 10px;
   }
@@ -252,7 +259,16 @@ body {
   }
 
   .left-panel {
-    flex-wrap: wrap; /* Wrap buttons if too many */
+    flex-direction: row; /* Horizontal alignment */
+    flex-wrap: wrap; /* Wrap into rows if screen too small */
+    justify-content: center;
+    gap: 8px; /* Tighter spacing */
+  }
+
+  .left-panel button {
+    min-width: 80px; /* Compact for horizontal fit */
+    flex: 1 1 45%; /* Grow/shrink, basis 45% to fit 2 per row */
+    max-width: 120px;
   }
 
   .status {
@@ -269,17 +285,18 @@ body {
     max-height: 140px;
     font-size: 12px;
   }
-
-  /* Ensure no overlap with table */
-  #root > div.p-4 {
-    padding: 0.5rem;
-  }
 }
 
 /* Extra small phones (≤480px) */
 @media (max-width: 480px) {
   .left-panel {
-    flex-direction: column; /* Stack buttons vertically on tiny screens */
+    flex-direction: row; /* Keep horizontal, but tighter */
+    gap: 4px;
+  }
+  .left-panel button {
+    min-width: 70px;
+    flex: 1 1 48%;
+    font-size: 0.875rem; /* Smaller button text */
   }
   .card-anim {
     width: 1.25rem;
