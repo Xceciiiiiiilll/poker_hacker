@@ -802,14 +802,14 @@
         const sbIndex = (dealerIndex + 1) % len;
         const bbIndex = (dealerIndex + 2) % len;
         if (currBet === 0) {
-          // Check round
+          // FIXED: Check round - Test for roundFirstPlayer *before* active check to handle folded first player
           nextIndex = (currentIndex + 1) % len;
           while (circled < len) {
+            if (nextIndex === roundFirstPlayer) {
+              return { nextIndex: -1, activeCount };
+            }
             const p = currentPlayers[nextIndex];
             if (p && !p.folded && p.chips > 0) {
-              if (nextIndex === roundFirstPlayer) {
-                return { nextIndex: -1, activeCount };
-              }
               return { nextIndex, activeCount };
             }
             nextIndex = (nextIndex + 1) % len;
@@ -1145,11 +1145,17 @@
         setLastOpponentActions(updatedLastOpponentActions);
         setIsProcessing(false);
         updateOpponentThoughts();
-        const { nextIndex } = getNextPlayerIndex(playerIndex, updatedPlayers, newCurrBet, roundFirstPlayer);
-        if (nextIndex === -1) {
+        // FIXED: After action, check if only 1 active left (e.g., after fold) - end round immediately if so
+        const activeCountAfter = updatedPlayers.filter(p => !p.folded && p.chips > 0).length;
+        if (activeCountAfter <= 1) {
           handleRoundComplete(updatedPlayers);
         } else {
-          handleNextPlayer(nextIndex, updatedPlayers);
+          const { nextIndex } = getNextPlayerIndex(playerIndex, updatedPlayers, newCurrBet, roundFirstPlayer);
+          if (nextIndex === -1) {
+            handleRoundComplete(updatedPlayers);
+          } else {
+            handleNextPlayer(nextIndex, updatedPlayers);
+          }
         }
       };
       const advanceStage = (updatedPlayers) => {
@@ -1314,11 +1320,17 @@
         setLastOpponentActions(updatedLastOpponentActions);
         setIsProcessing(false);
         updateOpponentThoughts();
-        const { nextIndex } = getNextPlayerIndex(0, updatedPlayers, newCurrBet, roundFirstPlayer);
-        if (nextIndex === -1) {
+        // FIXED: After action, check if only 1 active left (e.g., after fold) - end round immediately if so
+        const activeCountAfter = updatedPlayers.filter(p => !p.folded && p.chips > 0).length;
+        if (activeCountAfter <= 1) {
           handleRoundComplete(updatedPlayers);
         } else {
-          handleNextPlayer(nextIndex, updatedPlayers);
+          const { nextIndex } = getNextPlayerIndex(0, updatedPlayers, newCurrBet, roundFirstPlayer);
+          if (nextIndex === -1) {
+            handleRoundComplete(updatedPlayers);
+          } else {
+            handleNextPlayer(nextIndex, updatedPlayers);
+          }
         }
       };
       const playerCheckOrCall = () => {
