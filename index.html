@@ -517,11 +517,19 @@
           return () => clearTimeout(t);
         } else setShow(true);
       }, [animate]);
+      const isFaceDown = card === '?';
       return (
-        <div className={`w-10 h-14 bg-white rounded-md shadow-lg flex items-center justify-center font-bold
-          ${card.includes('♥') || card.includes('♦') ? 'text-red-600' : 'text-black'}
-          card-anim ${show ? 'show' : ''}`}>
-          {card}
+        <div 
+          className={`w-10 h-14 rounded-md shadow-lg flex items-center justify-center font-bold
+            ${isFaceDown ? '' : 'bg-white'}
+            ${!isFaceDown && (card.includes('♥') || card.includes('♦') ? 'text-red-600' : 'text-black')}
+            card-anim ${show ? 'show' : ''}`}
+          style={isFaceDown ? {
+            backgroundImage: 'url("card.png")',
+            backgroundSize: 'cover',
+            backgroundPosition: 'center'
+          } : {}}>
+          {!isFaceDown ? card : ''}
         </div>
       );
     };
